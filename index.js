@@ -42,6 +42,7 @@ IO.on("connection", (socket) => {
   console.log(`User ${socket.user} connected`);
   socket.join(socket.user);
 
+  // Handle call initiation
   socket.on("makeCall", (data) => {
     try {
       const { calleeId, sdpOffer } = data;
@@ -60,6 +61,64 @@ IO.on("connection", (socket) => {
     }
   });
 
+  // Handle call rejection
+  socket.on("rejectCall", (data) => {
+    try {
+      const { callerId, reason } = data;
+      if (!callerId) {
+        console.warn(`Invalid rejectCall payload from ${socket.user}`, data);
+        return;
+      }
+
+      console.log(`User ${socket.user} rejected call from ${callerId}`);
+      socket.to(callerId).emit("callRejected", {
+        callee: socket.user,
+        reason: reason || "Call rejected by the callee.",
+      });
+    } catch (err) {
+      console.error("Error in rejectCall:", err);
+    }
+  });
+
+  // Handle user being busy
+  socket.on("userBusy", (data) => {
+    try {
+      const { callerId } = data;
+      if (!callerId) {
+        console.warn(`Invalid userBusy payload from ${socket.user}`, data);
+        return;
+      }
+
+      console.log(`User ${socket.user} is busy for ${callerId}`);
+      socket.to(callerId).emit("userBusy", {
+        callee: socket.user,
+        message: "The callee is currently busy.",
+      });
+    } catch (err) {
+      console.error("Error in userBusy:", err);
+    }
+  });
+
+  // Handle missed call
+  socket.on("missedCall", (data) => {
+    try {
+      const { calleeId } = data;
+      if (!calleeId) {
+        console.warn(`Invalid missedCall payload from ${socket.user}`, data);
+        return;
+      }
+
+      console.log(`Call from ${socket.user} to ${calleeId} missed.`);
+      socket.to(calleeId).emit("missedCall", {
+        callerId: socket.user,
+        message: "You have a missed call.",
+      });
+    } catch (err) {
+      console.error("Error in missedCall:", err);
+    }
+  });
+
+  // Handle answering the call
   socket.on("answerCall", (data) => {
     try {
       const { callerId, sdpAnswer } = data;
@@ -78,6 +137,7 @@ IO.on("connection", (socket) => {
     }
   });
 
+  // Handle ICE candidates
   socket.on("IceCandidate", (data) => {
     try {
       const { calleeId, iceCandidate } = data;
@@ -96,16 +156,13 @@ IO.on("connection", (socket) => {
     }
   });
 
+  // Handle disconnection
   socket.on("disconnect", (reason) => {
     console.log(`User ${socket.user} disconnected. Reason: ${reason}`);
   });
 
+  // Handle errors
   socket.on("error", (err) => {
     console.error(`Socket error for user ${socket.user}:`, err);
   });
-});
-
-// Start the server
-server.listen(port, () => {
-  console.log(`Server is running on http://localhost:${port}`);
 });
