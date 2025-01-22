@@ -21,7 +21,6 @@ const IO = socketIO(server, {
 
 console.log(`Server running on http://localhost:${port}`);
 
-// Middleware for socket authentication
 IO.use((socket, next) => {
   try {
     const callerId = socket.handshake.query?.callerId;
@@ -165,4 +164,9 @@ IO.on("connection", (socket) => {
   socket.on("error", (err) => {
     console.error(`Socket error for user ${socket.user}:`, err);
   });
+});
+
+// Start the server
+server.listen(port, () => {
+  console.log(`Server is running on http://localhost:${port}`);
 });
