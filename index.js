@@ -1,172 +1,146 @@
+const cors = require("cors");
 const express = require("express");
-const http = require("http");
-const socketIO = require("socket.io");
+const { createServer } = require("http");
+const morgan = require("morgan");
+const { Server } = require("socket.io");
+const dotenv = require('dotenv');
 
+// load environment variables
+dotenv.config();
+
+// store this in redis or an appropriate db
+let users = [];
+
+// create server
 const app = express();
-const port = process.env.PORT || 8080;
+const httpServer = createServer(app);
 
-// Serve static files from the "public" directory
-app.use(express.static("public"));
-
-// Create an HTTP server
-const server = http.createServer(app);
-
-// Set up Socket.IO
-const IO = socketIO(server, {
-  cors: {
-    origin: "*",
-    methods: ["GET", "POST"],
-  },
+// create socket io server
+const io = new Server(httpServer, {
+    cors: {
+        origin: "*",
+        methods: ["GET", "POST"]
+    }
 });
 
-console.log(`Server running on http://localhost:${port}`);
+app.use(cors());
+app.use(morgan('combined'));
+app.use(express.json());
 
-IO.use((socket, next) => {
-  try {
-    const callerId = socket.handshake.query?.callerId;
-    if (!callerId) {
-      console.warn("Connection attempt without callerId");
-      return next(new Error("Unauthorized: Missing callerId"));
-    }
-    socket.user = callerId;
-    console.log(`User authenticated: ${callerId}`);
-    next();
-  } catch (err) {
-    console.error("Authentication error:", err);
-    next(err);
-  }
+app.get("/users", (req, res) => {
+    res.json({
+        users,
+    });
 });
 
-IO.on("connection", (socket) => {
-  console.log(`User ${socket.user} connected`);
-  socket.join(socket.user);
-
-  // Handle call initiation
-  socket.on("makeCall", (data) => {
-    try {
-      const { calleeId, sdpOffer } = data;
-      if (!calleeId || !sdpOffer) {
-        console.warn(`Invalid makeCall payload from ${socket.user}`, data);
-        return;
-      }
-
-      console.log(`User ${socket.user} is calling ${calleeId}`);
-      socket.to(calleeId).emit("newCall", {
-        callerId: socket.user,
-        sdpOffer,
-      });
-    } catch (err) {
-      console.error("Error in makeCall:", err);
+// when user connects the first time, we can authenticate them using
+// socket.handshake.auth
+// we can add a token jwt in { token: "JWT" }
+// and get it using socket.handshake.auth.token
+// we check if valid then call next or
+// call next(error) with any error otherwise
+// in this case we just get users id, which we call callerId
+// no auth is done but this can be added later
+io.use((socket, next) => {
+    if (socket.handshake.query?.callerId) {
+        socket['user'] = socket.handshake.query?.callerId;
+        next();
+    } else {
+        console.log("No token found");
+        next(new Error("No token found"));
     }
-  });
-
-  // Handle call rejection
-  socket.on("rejectCall", (data) => {
-    try {
-      const { callerId, reason } = data;
-      if (!callerId) {
-        console.warn(`Invalid rejectCall payload from ${socket.user}`, data);
-        return;
-      }
-
-      console.log(`User ${socket.user} rejected call from ${callerId}`);
-      socket.to(callerId).emit("callRejected", {
-        callee: socket.user,
-        reason: reason || "Call rejected by the callee.",
-      });
-    } catch (err) {
-      console.error("Error in rejectCall:", err);
-    }
-  });
-
-  // Handle user being busy
-  socket.on("userBusy", (data) => {
-    try {
-      const { callerId } = data;
-      if (!callerId) {
-        console.warn(`Invalid userBusy payload from ${socket.user}`, data);
-        return;
-      }
-
-      console.log(`User ${socket.user} is busy for ${callerId}`);
-      socket.to(callerId).emit("userBusy", {
-        callee: socket.user,
-        message: "The callee is currently busy.",
-      });
-    } catch (err) {
-      console.error("Error in userBusy:", err);
-    }
-  });
-
-  // Handle missed call
-  socket.on("missedCall", (data) => {
-    try {
-      const { calleeId } = data;
-      if (!calleeId) {
-        console.warn(`Invalid missedCall payload from ${socket.user}`, data);
-        return;
-      }
-
-      console.log(`Call from ${socket.user} to ${calleeId} missed.`);
-      socket.to(calleeId).emit("missedCall", {
-        callerId: socket.user,
-        message: "You have a missed call.",
-      });
-    } catch (err) {
-      console.error("Error in missedCall:", err);
-    }
-  });
-
-  // Handle answering the call
-  socket.on("answerCall", (data) => {
-    try {
-      const { callerId, sdpAnswer } = data;
-      if (!callerId || !sdpAnswer) {
-        console.warn(`Invalid answerCall payload from ${socket.user}`, data);
-        return;
-      }
-
-      console.log(`User ${socket.user} answered call from ${callerId}`);
-      socket.to(callerId).emit("callAnswered", {
-        callee: socket.user,
-        sdpAnswer,
-      });
-    } catch (err) {
-      console.error("Error in answerCall:", err);
-    }
-  });
-
-  // Handle ICE candidates
-  socket.on("IceCandidate", (data) => {
-    try {
-      const { calleeId, iceCandidate } = data;
-      if (!calleeId || !iceCandidate) {
-        console.warn(`Invalid IceCandidate payload from ${socket.user}`, data);
-        return;
-      }
-
-      console.log(`User ${socket.user} sent ICE candidate to ${calleeId}`);
-      socket.to(calleeId).emit("IceCandidate", {
-        sender: socket.user,
-        iceCandidate,
-      });
-    } catch (err) {
-      console.error("Error in IceCandidate:", err);
-    }
-  });
-
-  // Handle disconnection
-  socket.on("disconnect", (reason) => {
-    console.log(`User ${socket.user} disconnected. Reason: ${reason}`);
-  });
-
-  // Handle errors
-  socket.on("error", (err) => {
-    console.error(`Socket error for user ${socket.user}:`, err);
-  });
 });
 
-// Start the server
-server.listen(port, () => {
-  console.log(`Server is running on http://localhost:${port}`);
+// listen for socket connections & events
+io.on('connection', (socket) => {
+    console.log("new connection on socket server user is ", socket['user']);
+
+    socket.join(socket['user']);
+
+    // notify this user of online users
+    io.to(socket['user']).emit("new-users", { users });
+
+    // notify existent users that a new user just joined
+    if (!users.includes(socket['user'])) {
+
+        users.forEach((user) => {
+            io.to(user).emit("new-user", { user: socket['user'] });
+        });
+        users.push(socket['user']);
+    }
+
+    // when we get a call to start a call
+    socket.on('start-call', ({ to }) => {
+        console.log("initiating call request to ", to);
+
+        io.to(to).emit("incoming-call", { from: socket['user'] });
+    });
+
+    // when an incoming call is accepted
+    socket.on("accept-call", ({ to }) => {
+        console.log("call accepted by ", socket['user'], " from ", to);
+
+        io.to(to).emit("call-accepted", { to });
+    });
+
+    // when an incoming call is denied
+    socket.on("deny-call", ({ to }) => {
+        console.log("call denied by ", socket['user'], " from ", to);
+
+        io.to(to).emit("call-denied", { to });
+    });
+
+    // when a party leaves the call
+    socket.on("leave-call", ({ to }) => {
+        console.log("left call message by ", socket['user'], " from ", to);
+
+        io.to(to).emit("left-call", { to });
+    });
+
+    // when an incoming call is accepted, caller sends their WebRTC offer
+    socket.on("offer", ({ to, offer }) => {
+        console.log("offer from ", socket['user'], " to ", to);
+
+        io.to(to).emit("offer", { to, offer });
+    });
+
+    // when an offer is received, receiver sends a WebRTC offer-answer
+    socket.on("offer-answer", ({ to, answer }) => {
+        console.log("offer answer from ", socket['user'], " to ", to);
+
+        io.to(to).emit("offer-answer", { to, answer });
+    });
+
+    // when an ICE candidate is sent
+    socket.on("ice-candidate", ({ to, candidate }) => {
+        console.log("ICE candidate from ", socket['user'], " to ", to);
+
+        io.to(to).emit("ice-candidate", { to, candidate });
+    });
+
+    // when a socket disconnects
+    socket.on("disconnect", (reason) => {
+        users = users.filter((u) => u !== socket['user']);
+
+        users.forEach((user) => {
+            io.to(user).emit("user-left", { user: socket['user'] });
+        });
+        console.log("a socket disconnected ", socket['user']);
+    });
+});
+
+// create index route endpoint
+app.get('/', (_req, res) => {
+    res.json({
+        server: 'Signal #T90',
+        running: true,
+    });
+});
+
+// get server port
+const PORT = process.env.PORT || 8088;
+
+// start server
+httpServer.listen(PORT, () => {
+    console.log(`listening on port ${PORT}`);
 });
